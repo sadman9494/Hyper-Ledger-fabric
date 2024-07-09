@@ -1,5 +1,7 @@
 const express = require('express')
 const path = require('path')
+const crypto = require('crypto')
+const sendEmail = require('./sendEmail.js')
 const bodyParser = require('body-parser')
 const validator = require('validator')
 const cors = require('cors')
