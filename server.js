@@ -29,18 +29,18 @@ app.post('/create-user', async (req, res) => {
     try {
         const { userName, email, password, organisation } = req.body;
 
-        const tlsCert = organisation === 'org2.example.com' 
-                        ? path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com', 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt') 
-                        : path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com', 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt');
-
-        const keyPath = organisation === 'org2.example.com'
-                        ?path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com','users', 'User1@org2.example.com', 'msp', 'keystore', 'priv_sk')
-                        :path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com','users', 'User1@org1.example.com', 'msp', 'keystore', 'priv_sk');
-
-        const cert = organisation ==='org2.example.com'
-                     ?path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com','users', 'User1@org2.example.com', 'msp', 'signcerts', 'User1@org2.example.com-cert.pem')
-                     :path.join(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com','users', 'User1@org1.example.com', 'msp', 'signcerts', 'User1@org1.example.com-cert.pem');
-
+                     const tlsCert = organisation === 'org2.example.com'
+                     ? path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com', 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt')
+                     : path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com', 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt');
+                 
+                 const keyPath = organisation === 'org2.example.com'
+                     ? path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com', 'users', 'User1@org2.example.com', 'msp', 'keystore', 'priv_sk')
+                     : path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com', 'users', 'User1@org1.example.com', 'msp', 'keystore', 'priv_sk');
+                 
+                 const cert = organisation === 'org2.example.com'
+                     ? path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com', 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'User1@org2.example.com-cert.pem')
+                     : path.resolve(__dirname, '..', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com', 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'User1@org1.example.com-cert.pem');
+                 
         const user = new userModel(
         {
           userName,
@@ -52,6 +52,7 @@ app.post('/create-user', async (req, res) => {
           cert
         }
        );
+      
         await user.save();
         res.status(200).send({ message: "user is successfully created" });
     }
@@ -64,7 +65,6 @@ app.post('/create-user', async (req, res) => {
 app.post('/login', async (req, res) => {
     try {
         const user = await userModel.findOne({ email: req.body.email, organisation: req.body.organisation });
-        //console.log(user)
         if (!user || user.password != req.body.password) {
             res.status(404).json({ data: "invalid user" });
         }
@@ -116,8 +116,65 @@ app.get('/users',decode, async (req, res) => {
     }
 })
 
+
+app.post('/issue-certificate', cors(corsOptions),decode,async(req,res)=>{
+
+    const org = req.organisation
+    if(!req.body.tracking_id){
+        return res.status(400).json({data:"Fileds Are Missing"})
+    }
+
+    let cert_hash  = crypto.createHash('sha256')
+    let cert_id = Math.floor(Math.random() * 12562) * Math.floor(Math.random() * 25641);
+    let track_id = req.body.tracking_id;
+    let student_name,student_email;
+
+    try {
+
+        request = await contract.read_request(track_id.toString(),org)
+        request = JSON.parse(request)
+        student_name = request.Student_Name
+        student_email = request.Student_Email
+        let newRequest = JSON.stringify(request)
+        cert_hash = cert_hash.update(`${newRequest.Student_Name},${newRequest.Student_Id},${newRequest.Student_Email},${newRequest.Degree},${newRequest.Major},${newRequest.Result},${newRequest.Requester_Authority},${cert_id}`);
+        cert_hash = cert_hash.digest('hex')
+ 
+       
+    } catch(error) {
+        if (error){
+            console.log(error)
+            return res.status(500).json({data:`No data found for  id ${track_id}`})
+        }
+    }
+
+    try {
+       
+        let result = await contract.issue_certificate(track_id.toString(),cert_hash,cert_id.toString(), org)
+        if (parseInt(result) === 0 ){
+            return res.status(200).json({data: `Certificate Already Created For The Tracking Id ${track_id}`})
+        }
+        if( result === "Something Went Wrong"){
+            return res.status(500).json({data:"Failed To Connect The Blokchain Network"})
+        }
+        let emailStatus = await sendEmail(student_name,cert_id,student_email)
+        if (emailStatus === false) {
+
+            return res.status(500).json({data:`Certificate Created With The Certificate Id ${result}. But Email Was not Sent`})
+            
+        }
+        return res.status(201).json({data: `Certificate Created With The Certificate Id ${result}`})
+    } catch (error) {
+        if (error){
+            console.log(error)
+            return res.status(500).json({data:`No data found for  id ${track_id}`})
+        }
+    }
+})
+
 app.post('/submit-request',cors(corsOptions),decode, async (req , res)=> {
    
+    const org = req.organisation
+
     if( !req.body.student_name || !req.body.student_id || 
         !req.body.student_email || !req.body.degree || !req.body.major || !req.body.result ){
 
@@ -128,7 +185,7 @@ app.post('/submit-request',cors(corsOptions),decode, async (req , res)=> {
     }
     let track_id
     try {
-        let requests = await contract.get_all_request()
+        let requests = await contract.get_all_request(org)
         
         if(requests === "Something Went Wrong"){
             
@@ -152,8 +209,7 @@ app.post('/submit-request',cors(corsOptions),decode, async (req , res)=> {
     try{
        
         const response = await contract.submit_request(track_id.toString(),req.body.student_name,
-        req.body.student_id, req.body.student_email,req.body.degree ,req.body.major,req.body.result, req.cert, req.tlsCert,
-        req.keyPath)
+        req.body.student_id, req.body.student_email,req.body.degree ,req.body.major,req.body.result,org)
         return res.status(200).json({data:JSON.parse(response)});
 
     }catch(err){
@@ -163,14 +219,15 @@ app.post('/submit-request',cors(corsOptions),decode, async (req , res)=> {
         
 })
 
-app.get('/read-request/:tracking_id',async (req,res)=>{
+app.get('/read-request/:tracking_id',decode,async (req,res)=>{
 
     const track_id = req.params.tracking_id
+    const org = req.organisation
     if(!track_id){
         return res.status(400).json({data:"Invlaid Path"})
     }
     try {
-        let request_history =  await contract.read_request(track_id.toString())
+        let request_history =  await contract.read_request(track_id.toString() ,org )
         return res.status(200).json({data:JSON.parse(request_history)})
     } catch (error) {
         if (error) {
@@ -180,14 +237,15 @@ app.get('/read-request/:tracking_id',async (req,res)=>{
 })
 
 
-app.post('/read-request',async (req,res)=>{
+app.post('/read-request',decode,async (req,res)=>{
 
     const track_id = req.body.tracking_id
+    const org = req.organisation
     if(!track_id){
         return res.status(400).json({data:"Missing Required Tracking Id"})
     }
     try {
-        let request_history =  await contract.read_request(track_id.toString())
+        let request_history =  await contract.read_request(track_id.toString(),org)
         return res.status(200).json({data:JSON.parse(request_history)})
     } catch (error) {
         if (error) {
@@ -199,7 +257,15 @@ app.post('/read-request',async (req,res)=>{
 app.get('/get-all-the-request', cors(corsOptions),decode, async(req,res)=>{
 
     try {
-        const result = await contract.get_all_request(req.cert, req.tlsCert, req.keyPath)
+
+        const org = req.organisation
+        const result = await contract.get_all_request(org)
+        
+        if (!result || result.trim() === '') {
+            throw new Error('Empty result received from get_all_request');
+        }
+
+        console.log('result',result);
         let requests = JSON.parse(result)
         requests.forEach(request =>{
             if(request.Is_Reqeust_Completed){
@@ -217,16 +283,17 @@ app.get('/get-all-the-request', cors(corsOptions),decode, async(req,res)=>{
 })
 
 
-app.post('/read-certificate-by-id',async(req,res)=>{
+app.post('/read-certificate-by-id',decode,async(req,res)=>{
 
     let cert_id = req.body.certificate_id
+    const org = req.organisation
 
     if(!cert_id){
         return res.status(400).json({data:"Required Certificate Id Is Missing"})
     }
 
     try {
-        const certificate = await contract.read_certificate_by_certid(cert_id.toString())
+        const certificate = await contract.read_certificate_by_certid(cert_id.toString(),org)
         let cert = JSON.parse(certificate);
         cert.Requester_Authority = "Dhaka College";
         cert.Issuer_Authority = "Dhaka University";
@@ -239,15 +306,16 @@ app.post('/read-certificate-by-id',async(req,res)=>{
 })
 
 
-app.post('/history-of-certificate',async (req,res)=>{
+app.post('/history-of-certificate',decode,async (req,res)=>{
 
     let tracking_id = req.body.tracking_id
+    const org = req.organisation
     if(!tracking_id){
         return res.status(400).json({data:"Required Fields Tracking_Id  Is  Missing"})
     }
 
     try {
-        let request_history =  await contract.history_of_a_request(tracking_id.toString())
+        let request_history =  await contract.history_of_a_request(tracking_id.toString(), org)
         let requests = JSON.parse(request_history)
         requests.forEach(request =>{
             if(request.Is_Reqeust_Completed){
@@ -267,14 +335,15 @@ app.post('/history-of-certificate',async (req,res)=>{
     }
 })
 
-app.post('/verify-by-hash', async(req,res)=>{
-    
+app.post('/verify-by-hash', decode,async(req,res)=>{
+
+    const org = req.organisation
     let certificate_hash = req.body.certificate_hash
     if(!certificate_hash){
         return res.status(400).json({data:"Required Certificate Hash Is Missing"})
     }
     try {
-        let result = await contract.verify_by_hash(certificate_hash.toString())
+        let result = await contract.verify_by_hash(certificate_hash.toString(),org)
         let cert = JSON.parse(result);
         cert.Requester_Authority = "Dhaka College";
         cert.Issuer_Authority = "Dhaka University";
@@ -288,14 +357,15 @@ app.post('/verify-by-hash', async(req,res)=>{
 })
 
 
-app.get('/read-certificate-by-id/:certificate_id', cors(corsOptions), async(req,res)=>{
+app.get('/read-certificate-by-id/:certificate_id', cors(corsOptions),decode, async(req,res)=>{
 
     let cert_id = req.params.certificate_id
+    const org = req.organisation
 
     
 
     try {
-        const certificate = await contract.read_certificate_by_certid(cert_id.toString())
+        const certificate = await contract.read_certificate_by_certid(cert_id.toString(), org)
         let cert = JSON.parse(certificate);
         cert.Requester_Authority = "Dhaka College"
         cert.Issuer_Authority = "Dhaka University"
@@ -307,15 +377,16 @@ app.get('/read-certificate-by-id/:certificate_id', cors(corsOptions), async(req,
     }
 })
 
-app.get('/history-of-certificate/:tracking_id', cors(corsOptions),async (req,res)=>{
+app.get('/history-of-certificate/:tracking_id', cors(corsOptions),decode,async (req,res)=>{
 
     let tracking_id = req.params.tracking_id
+    const org = req.organisation
     if(!tracking_id){
         return res.status(400).json({data:"Required Fields Tracking_Id  Is  Missing"})
     }
 
     try {
-        let request_history =  await contract.history_of_a_request(tracking_id.toString())
+        let request_history =  await contract.history_of_a_request(tracking_id.toString(),org)
         let requests = JSON.parse(request_history)
         requests.forEach(request =>{
             if(request.Is_Reqeust_Completed){
